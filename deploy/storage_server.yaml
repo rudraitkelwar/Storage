@@ -1,0 +1,208 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvme-tcp-server
+  labels:
+    app: nvme-tcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nvme-tcp-server
+  template:
+    metadata:
+      labels:
+        app: nvme-tcp-server
+    spec:
+      containers:
+      - name: nvme-tcp-server
+        image: python:3.9-slim
+        command: ["/bin/sh"]
+        args: ["-c", "python /app/nvme-tcp_server.py"]
+        workingDir: /app
+        ports:
+        - containerPort: 8080
+          name: tcp-port
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+        - name: data-volume
+          mountPath: /data
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; s=socket.socket(); s.connect(('localhost', 8080)); s.close()"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; s=socket.socket(); s.connect(('localhost', 8080)); s.close()"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        restartPolicy: Always
+      volumes:
+      - name: script-volume
+        configMap:
+          name: nvme-tcp-script
+          defaultMode: 0755
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: nvme-tcp-pvc
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvme-tcp-script
+data:
+  nvme-tcp_server.py: |
+    #!/usr/bin/env python3
+    """
+    NVMe TCP Server Script
+    Replace this with your actual script content
+    """
+    import socket
+    import time
+    import threading
+    import logging
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    class NVMeTCPServer:
+        def __init__(self, host='0.0.0.0', port=8080):
+            self.host = host
+            self.port = port
+            self.server_socket = None
+            self.running = False
+            
+        def start_server(self):
+            """Start the NVMe TCP server"""
+            try:
+                self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self.server_socket.bind((self.host, self.port))
+                self.server_socket.listen(5)
+                self.running = True
+                
+                logger.info(f"NVMe TCP Server started on {self.host}:{self.port}")
+                
+                while self.running:
+                    try:
+                        client_socket, addr = self.server_socket.accept()
+                        logger.info(f"Connection from {addr}")
+                        
+                        # Handle client in separate thread
+                        client_thread = threading.Thread(
+                            target=self.handle_client, 
+                            args=(client_socket,)
+                        )
+                        client_thread.daemon = True
+                        client_thread.start()
+                        
+                    except socket.error as e:
+                        if self.running:
+                            logger.error(f"Socket error: {e}")
+                            
+            except Exception as e:
+                logger.error(f"Server error: {e}")
+                
+        def handle_client(self, client_socket):
+            """Handle individual client connections"""
+            try:
+                while True:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                    
+                    # Echo back the data (replace with your NVMe logic)
+                    response = f"NVMe Server received: {data.decode()}\n"
+                    client_socket.send(response.encode())
+                    
+            except Exception as e:
+                logger.error(f"Client handling error: {e}")
+            finally:
+                client_socket.close()
+                
+        def stop_server(self):
+            """Stop the server gracefully"""
+            self.running = False
+            if self.server_socket:
+                self.server_socket.close()
+                logger.info("Server stopped")
+    
+    def main():
+        server = NVMeTCPServer()
+        
+        try:
+            server.start_server()
+        except KeyboardInterrupt:
+            logger.info("Received interrupt signal")
+        finally:
+            server.stop_server()
+    
+    if __name__ == "__main__":
+        main()
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvme-tcp-service
+spec:
+  selector:
+    app: nvme-tcp-server
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvme-tcp-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Optional: Service Monitor for Prometheus (if using monitoring)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nvme-tcp-monitor
+spec:
+  selector:
+    matchLabels:
+      app: nvme-tcp-server
+  endpoints:
+  - port: tcp-port
