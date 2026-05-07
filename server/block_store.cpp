@@ -147,7 +147,7 @@ bool BlockStore::write(uint64_t offset, const std::string& data, std::string& er
   uint32_t c = crc32(data.data(), data.size());
 
   // WAL first, then apply to data. WAL enables crash recovery.
-  if (!append_wal(offset, len, c, data.data(), err)) return false
+  if (!append_wal(offset, len, c, data.data(), err)) return false;
 
   ssize_t pw = ::pwrite(data_fd_, data.data(), len, (off_t)offset);
   if (pw != (ssize_t)len) { err = "pwrite failed: " + std::string(std::strerror(errno)); return false; }
@@ -157,7 +157,6 @@ bool BlockStore::write(uint64_t offset, const std::string& data, std::string& er
   return true;
 }
 
-bool BlockStore::replay_wal(std::string& err); // already defined above
 
 // Call this once from server startup
 bool init_store(BlockStore& bs, std::string& err) {
